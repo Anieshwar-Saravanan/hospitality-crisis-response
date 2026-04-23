@@ -1,9 +1,13 @@
 import json
 import uuid
 from datetime import datetime, timezone
+import os
 
 import streamlit as st
 import google.generativeai as genai
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # ─── Page Config ──────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -273,10 +277,11 @@ init_state()
 with st.sidebar:
     st.markdown("## 🚨 Crisis Intake")
     st.markdown("---")
-    api_key = st.text_input("Gemini API Key", type="password",
-                             placeholder="AIza…", key="api_key_input")
-    if not api_key:
-        st.warning("Enter your Gemini API key to begin.")
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if api_key:
+        st.success("Gemini API key loaded from .env")
+    else:
+        st.warning("Set GEMINI_API_KEY in .env to begin.")
 
     st.markdown("---")
     st.markdown("### 📊 Field Progress")

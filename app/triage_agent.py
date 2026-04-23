@@ -28,6 +28,9 @@ import re
 import os
 import uuid
 from datetime import datetime, timezone
+from dotenv import load_dotenv
+
+load_dotenv()
 
 try:
     from google import genai
@@ -385,14 +388,11 @@ if "triage_log" not in st.session_state:
 with st.sidebar:
     st.markdown("## 🧠 Triage Agent")
     st.markdown("---")
-    api_key = st.text_input(
-        "Gemini API Key",
-        type="password",
-        placeholder="AIza…",
-        value=os.environ.get("GEMINI_API_KEY", ""),
-    )
-    if not api_key:
-        st.warning("Enter your Gemini API key to begin.")
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if api_key:
+        st.success("Gemini API key loaded from .env")
+    else:
+        st.warning("Set GEMINI_API_KEY in .env to begin.")
 
     st.markdown("---")
     st.markdown("### 📋 Triage Summary")

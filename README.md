@@ -15,3 +15,7 @@ detection, triage, and coordinated response in hospitality venues.
 - Google Cloud Run, Pub/Sub, Firestore, BigQuery
 - Vertex AI — Gemini 2.5 Flash
 - Cloud Speech-to-Text
+
+## Local Setup
+- Create a `.env` file at the repository root and set `GEMINI_API_KEY=<your key>`.
+- The Streamlit apps load that value automatically at startup.
