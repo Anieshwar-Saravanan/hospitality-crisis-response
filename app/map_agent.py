@@ -1,15 +1,192 @@
 import streamlit as st
-import requests
+
 import folium
 from streamlit_folium import st_folium
-import time
 import json
+import googlemaps
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 st.set_page_config(
     page_title="Map Agent",
     page_icon="🗺️",
     layout="wide"
 )
+
+# --- GOOGLE MAPS CONFIG ---
+GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
+if GOOGLE_MAPS_API_KEY:
+    gmaps = googlemaps.Client(key=GOOGLE_MAPS_API_KEY)
+else:
+    gmaps = None
+
+# --- CORE PROCESSING FUNCTION ---
+def process_map_dispatch(location, services):
+    """
+    Process incident location and find nearby authorities
+    Returns structured result with authorities organized by service type
+    """
+    if not gmaps:
+        return {"error": "Google Maps API key not configured"}
+    
+    try:
+        # 🔥 STEP 1: Geocode
+        geo = gmaps.geocode(location)
+        if not geo:
+            return {"error": "Geocoding failed"}
+
+        lat = geo[0]["geometry"]["location"]["lat"]
+        lng = geo[0]["geometry"]["location"]["lng"]
+
+        service_map = {
+            "fire": "fire_station",
+            "ambulance": "hospital",
+            "police": "police"
+        }
+
+        authorities = []
+
+        # 🔥 STEP 2: Collect authorities for each service
+        for s in services:
+            collected = []
+
+            if s == "ambulance":
+                queries = [
+                    f"emergency care hospital near {location}",
+                    f"government hospital near {location}",
+                    f"multi speciality hospital near {location}"
+                ]
+
+                for query in queries:
+                    places = gmaps.places(query=query)
+
+                    for p in places.get("results", []):
+                        name = (p.get("name") or "").lower()
+                        rating = p.get("rating", 0)
+
+                        if rating < 3.8:
+                            continue
+
+                        loc = p.get("geometry", {}).get("location")
+                        if not loc:
+                            continue
+
+                        collected.append({
+                            "name": p.get("name"),
+                            "service": s,
+                            "lat": loc["lat"],
+                            "lng": loc["lng"]
+                        })
+
+                    if len(collected) >= 3:
+                        break
+
+            else:
+                places = gmaps.places_nearby(
+                    location=(lat, lng),
+                    radius=5000,
+                    type=service_map.get(s)
+                )
+
+                for p in places.get("results", []):
+                    name = (p.get("name") or "").lower()
+                    loc = p.get("geometry", {}).get("location")
+                    if not loc:
+                        continue
+
+                    # 🔥 FIRE STATION FILTERING
+                    if s == "fire":
+                        exclude_keywords = [
+                            "equipment", "shop", "store", "supply", "supplies",
+                            "sales", "retail", "vendor", "distributor",
+                            "trade", "commerce", "merchant", "dealer", "export"
+                        ]
+                        required_keywords = [
+                            "fire", "station", "department", "firefighting", "brigade"
+                        ]
+                        
+                        has_required = any(keyword in name for keyword in required_keywords)
+                        has_excluded = any(keyword in name for keyword in exclude_keywords)
+                        
+                        if not has_required or has_excluded:
+                            continue
+
+                    collected.append({
+                        "name": p.get("name"),
+                        "service": s,
+                        "lat": loc["lat"],
+                        "lng": loc["lng"]
+                    })
+
+            # Remove duplicates
+            unique = {}
+            for a in collected:
+                unique[a["name"]] = a
+
+            # 🔥 LIMIT TO 2-5 PER SERVICE
+            service_authorities = list(unique.values())
+            
+            if service_authorities:
+                service_authorities.sort(key=lambda a: (a["lat"] - lat) ** 2 + (a["lng"] - lng) ** 2)
+                service_authorities = service_authorities[:5]
+            
+            if len(service_authorities) == 0:
+                continue
+            
+            authorities.extend(service_authorities)
+
+        if not authorities:
+            return {"error": "No authorities found"}
+
+        # 🔥 SORT ALL BY DISTANCE
+        authorities.sort(key=lambda a: (a["lat"] - lat) ** 2 + (a["lng"] - lng) ** 2)
+
+        # 🔥 DISTANCE MATRIX
+        destinations = [f"{a['lat']},{a['lng']}" for a in authorities]
+        matrix = gmaps.distance_matrix(
+            origins=[f"{lat},{lng}"],
+            destinations=destinations,
+            mode="driving"
+        )
+
+        elements = matrix["rows"][0]["elements"]
+
+        for i, e in enumerate(elements):
+            if e["status"] == "OK":
+                authorities[i]["distance_km"] = round(e["distance"]["value"] / 1000, 2)
+                authorities[i]["eta"] = e["duration"]["value"] // 60
+            else:
+                authorities[i]["distance_km"] = None
+                authorities[i]["eta"] = None
+
+            authorities[i]["alert_sent"] = False
+
+        authorities.sort(key=lambda x: x.get("distance_km") or 9999)
+
+        # 🔥 ORGANIZE BY SERVICE TYPE
+        primaries_by_service = {}
+        all_by_service = {}
+
+        for service in services:
+            all_by_service[service] = [a for a in authorities if a.get("service") == service]
+            if all_by_service[service]:
+                primaries_by_service[service] = all_by_service[service][0]
+                all_by_service[service][0]["alert_sent"] = True
+
+        return {
+            "location": location,
+            "coordinates": {"lat": lat, "lng": lng},
+            "requested_services": services,
+            "primary": authorities[0] if authorities else None,
+            "primaries_by_service": primaries_by_service,
+            "authorities_by_service": all_by_service,
+            "authorities": authorities
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
 
 # --- CUSTOM CSS ---
 st.markdown("""
@@ -51,23 +228,34 @@ h1, h2, h3 { font-family: 'Share Tech Mono', monospace !important; color: #f0a50
 st.title("🗺️ Emergency Authorities Map Agent")
 
 # --- SESSION STATE ---
+# --- LOAD TRIAGE DATA ---
+
 if "data" not in st.session_state:
     st.session_state.data = None
 
 if "auto_loaded" not in st.session_state:
     st.session_state.auto_loaded = False
+# --- LOAD TRIAGE DATA ---
+if "shared_triage_json" in st.session_state and not st.session_state.auto_loaded:
+    try:
+        triage_data = json.loads(st.session_state.shared_triage_json)
+
+        comms = triage_data.get("comms_payload", {})
+        location = comms.get("affected_area")
+        services = comms.get("required_services", [])
+
+        if location and services:
+            with st.spinner("Processing triage dispatch..."):
+                data = process_map_dispatch(location, services)
+
+            st.session_state.data = data
+            st.session_state.auto_loaded = True
+
+    except Exception as e:
+        st.error(f"Triage → Map error: {e}")
 
 # --- AUTO-LOAD FROM BACKEND ---
-if not st.session_state.auto_loaded:
-    try:
-        r = requests.get("http://localhost:8081/map-result", timeout=5)
-        backend_data = r.json()
-        
-        if backend_data and "coordinates" in backend_data:
-            st.session_state.data = backend_data
-            st.session_state.auto_loaded = True
-    except:
-        pass
+
 
 # --- MANUAL INPUT SECTION ---
 with st.expander("📍 Manual Dispatch", expanded=not st.session_state.data):
@@ -86,48 +274,27 @@ with st.expander("📍 Manual Dispatch", expanded=not st.session_state.data):
     # --- DISPATCH BUTTON ---
     if st.button("🚀 Dispatch"):
 
-        payload = {
-            "payload": {
-                "affected_area": location,
-                "required_services": services
-            }
-        }
-
-        try:
-            # 🔥 STEP 1: SEND TO BACKEND
-            res = requests.post("http://localhost:8081/map", json=payload, timeout=10)
-
-            if res.status_code != 200:
-                st.error("❌ Backend error")
-                st.text(res.text)
-                st.stop()
-
-            # 🔥 STEP 2: FETCH RESULT (polling)
-            data = None
-
-            with st.spinner("Finding nearest authorities..."):
-                for _ in range(15):
-                    r = requests.get("http://localhost:8081/map-result", timeout=5)
-                    data = r.json()
-
-                    if data and "primary" in data:
-                        break
-
-                    time.sleep(1)
-
-            if not data:
-                st.error("❌ No data received from backend")
-                st.stop()
-
-            # ✅ SAVE RESULT
-            st.session_state.data = data
-            st.session_state.auto_loaded = True
-            st.rerun()
-
-        except Exception as e:
-            st.error(f"❌ Request failed: {e}")
+        if not location or not services:
+            st.error("Please provide location and at least one service")
             st.stop()
 
+        with st.spinner("Finding nearest authorities..."):
+            data = process_map_dispatch(location, services)
+
+        if not data:
+            st.error("❌ No data returned")
+            st.stop()
+
+        if "error" in data:
+            st.error(f"❌ {data['error']}")
+            st.stop()
+
+        # ✅ Save result
+        st.session_state.data = data
+        st.session_state.auto_loaded = True
+        st.rerun()
+
+        
 # --- USE STORED DATA ---
 data = st.session_state.data
 
