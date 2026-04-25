@@ -1,36 +1,15 @@
 from flask import Flask, request, jsonify
 import googlemaps
 import os
-import vertexai
-from vertexai.generative_models import GenerativeModel
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = Flask(__name__)
 
 # --- CONFIG ---
 GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
 gmaps = googlemaps.Client(key=GOOGLE_MAPS_API_KEY)
-
-vertexai.init(project="your-project-id", location="us-central1")
-model = GenerativeModel("gemini-1.5-flash")
-
-# --- TRIAGE ---
-@app.route("/triage", methods=["POST"])
-def triage():
-    data = request.json
-
-    prompt = f"""
-    Analyze this incident and return JSON:
-    {data}
-    """
-
-    response = model.generate_content(prompt)
-
-    return jsonify({
-        "triage_output": response.text
-    })
-
-
-
 
 
 
@@ -114,9 +93,34 @@ def map_agent():
                 )
 
                 for p in places.get("results", []):
+                    name = (p.get("name") or "").lower()
                     loc = p.get("geometry", {}).get("location")
                     if not loc:
                         continue
+
+                    # 🔥 FIRE STATION FILTERING - Exclude equipment shops and non-emergency facilities
+                    if s == "fire":
+                        # Keywords to exclude (equipment shops, supply stores, etc.)
+                        exclude_keywords = [
+                            "equipment", "shop", "store", "supply", "supplies",
+                            "sales", "retail", "vendor", "distributor", "distributor",
+                            "trade", "commerce", "merchant", "dealer", "export"
+                        ]
+                        
+                        # Keywords that indicate actual fire stations
+                        required_keywords = [
+                            "fire", "station", "department", "firefighting", "brigade"
+                        ]
+                        
+                        # Check if name contains required fire station keywords
+                        has_required = any(keyword in name for keyword in required_keywords)
+                        
+                        # Check if name contains excluding keywords
+                        has_excluded = any(keyword in name for keyword in exclude_keywords)
+                        
+                        # Only include if it's a fire service AND not a shop
+                        if not has_required or has_excluded:
+                            continue
 
                     collected.append({
                         "name": p.get("name"),
