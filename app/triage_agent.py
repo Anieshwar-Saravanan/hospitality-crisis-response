@@ -612,30 +612,40 @@ with input_col:
     # Download completed triage
     if st.session_state.triage_result:
         tid = st.session_state.triage_result.get("triage_id", "triage")[:8]
-        st.download_button(
-            "⬇️ Download Triage JSON",
-            data=json.dumps(st.session_state.triage_result, indent=2),
-            file_name=f"triage_{tid}.json",
-            mime="application/json",
-        )
+        
+        col_dl, col_comms = st.columns(2)
+        
+        with col_dl:
+            st.download_button(
+                "⬇️ Download Triage JSON",
+                data=json.dumps(st.session_state.triage_result, indent=2),
+                file_name=f"triage_{tid}.json",
+                mime="application/json",
+            )
+
+        with col_comms:
+            if st.button("➡️ Send to Comms Agent", use_container_width=True):
+                # Store the triage result in session state for the comms agent
+                st.session_state.shared_triage_json = json.dumps(
+                    st.session_state.triage_result, indent=2
+                )
+                st.success("✅ Triage data transferred! Navigating to Comms Agent...")
+                st.balloons()
+                # Navigate to comms agent page
+                st.switch_page("comm_agent.py")
 
         st.markdown("<br>", unsafe_allow_html=True)
         
         # Map Agent button
-        col_map, col_comms = st.columns(2)
-        with col_map:
-            if st.button("🗺️ Send to Map Agent", use_container_width=True):
-                with st.spinner("🗺️ Routing to emergency authorities…"):
-                    success, response = send_to_map_agent(st.session_state.triage_result)
-                    if success:
-                        st.success("✅ Sent to Map Agent! Data is ready. Navigate to the Map Agent page to view.")
-                        st.balloons()
-                    else:
-                        st.error(f"❌ Failed to send to Map Agent: {response}")
-        
-        with col_comms:
-            if st.button("➡️ Send to Comms Agent", use_container_width=True):
-                st.switch_page("comm_agent.py")
+        st.markdown("---")
+        if st.button("🗺️ Send to Map Agent", use_container_width=True):
+            with st.spinner("🗺️ Routing to emergency authorities…"):
+                success, response = send_to_map_agent(st.session_state.triage_result)
+                if success:
+                    st.success("✅ Sent to Map Agent! Data is ready. Navigate to the Map Agent page to view.")
+                    st.balloons()
+                else:
+                    st.error(f"❌ Failed to send to Map Agent: {response}")
 
 # ── RIGHT: Output ──
 with output_col:
